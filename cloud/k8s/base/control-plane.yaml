@@ -1,0 +1,81 @@
+apiVersion: v1
+kind: Secret
+metadata:
+  name: houston-control-plane
+  namespace: houston-system
+type: Opaque
+stringData:
+  # Override via kustomize or: kubectl create secret generic houston-control-plane --from-literal=admin-token=...
+  admin-token: "change-me-in-production"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: houston-control-plane
+  namespace: houston-system
+  labels:
+    app: houston-control-plane
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: houston-control-plane
+  template:
+    metadata:
+      labels:
+        app: houston-control-plane
+    spec:
+      serviceAccountName: houston-control-plane
+      containers:
+        - name: control-plane
+          image: houston/control-plane:dev
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8080
+          env:
+            - name: HOUSTON_CP_BIND
+              value: "0.0.0.0:8080"
+            - name: HOUSTON_CP_ADMIN_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: houston-control-plane
+                  key: admin-token
+            - name: HOUSTON_CP_DB_PATH
+              value: "/data/control-plane.db"
+            - name: HOUSTON_ENGINE_IMAGE
+              value: "houston/engine:dev"
+            - name: RUST_LOG
+              value: "info,houston_control_plane=debug"
+          volumeMounts:
+            - name: data
+              mountPath: /data
+          readinessProbe:
+            httpGet:
+              path: /v1/health
+              port: 8080
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: houston-control-plane
+  namespace: houston-system
+spec:
+  selector:
+    app: houston-control-plane
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080

@@ -1,0 +1,36 @@
+# Applied per tenant namespace. Denies lateral traffic between tenant pods;
+# only the control plane in houston-system may reach agent services.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: tenant-isolation
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              houston.ai/component: control-plane
+      ports:
+        - protocol: TCP
+          port: 7777
+  egress:
+    - to:
+        - namespaceSelector: {}
+      ports:
+        - protocol: TCP
+          port: 443
+        - protocol: TCP
+          port: 53
+        - protocol: UDP
+          port: 53
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - protocol: UDP
+          port: 53
