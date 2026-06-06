@@ -1,7 +1,5 @@
 use std::collections::BTreeMap;
-use std::time::Duration;
-
-use anyhow::{anyhow, Context};
+use anyhow::Context;
 use k8s_openapi::api::apps::v1::Deployment;
 use k8s_openapi::api::core::v1::{
     Container, EnvVar, EnvVarSource, PersistentVolumeClaim, PersistentVolumeClaimSpec,
@@ -17,7 +15,6 @@ use k8s_openapi::apimachinery::pkg::apis::meta::v1::{LabelSelector, ObjectMeta};
 use kube::api::{DeleteParams, PostParams};
 use kube::{Api, Client};
 use rand::RngCore;
-use tokio::time::sleep;
 
 pub struct Provisioner {
     client: Client,
@@ -191,7 +188,8 @@ impl Provisioner {
             Err(e) => return Err(e.into()),
         }
 
-        self.wait_for_ready(namespace, &deployment_name).await?;
+        // Fire and forget: return as soon as K8s accepts the resources.
+        // The pod will reach Running state asynchronously.
         Ok((service_name, engine_token))
     }
 
@@ -214,37 +212,6 @@ impl Provisioner {
         format!("http://{service_name}.{namespace}.svc.cluster.local:7777")
     }
 
-    async fn wait_for_ready(&self, namespace: &str, deployment: &str) -> anyhow::Result<()> {
-        let pods: Api<k8s_openapi::api::core::v1::Pod> =
-            Api::namespaced(self.client.clone(), namespace);
-        for attempt in 0..60 {
-            let list = pods
-                .list(&kube::api::ListParams::default().labels(&format!("app={deployment}")))
-                .await?;
-            if let Some(pod) = list.items.first() {
-                if let Some(status) = &pod.status {
-                    if status.phase.as_deref() == Some("Running") {
-                        if status
-                            .conditions
-                            .as_ref()
-                            .is_some_and(|conds| {
-                                conds.iter().any(|c| {
-                                    c.type_ == "Ready" && c.status == "True"
-                                })
-                            })
-                        {
-                            return Ok(());
-                        }
-                    }
-                }
-            }
-            sleep(Duration::from_secs(2)).await;
-            if attempt == 59 {
-                return Err(anyhow!("agent pod not ready after timeout"));
-            }
-        }
-        Ok(())
-    }
 }
 
 fn agent_deployment(
@@ -286,18 +253,18 @@ fn agent_deployment(
                 match_labels: Some(BTreeMap::from([("app".into(), name.to_string())])),
                 ..Default::default()
             },
-            template: PodTemplateSpec {
-                metadata: ObjectMeta {
+                template: PodTemplateSpec {
+                metadata: Some(ObjectMeta {
                     labels: Some(BTreeMap::from([
                         ("app".into(), name.to_string()),
                         ("houston.ai/agent".into(), agent_id.into()),
                     ])),
                     ..Default::default()
-                },
+                }),
                 spec: Some(PodSpec {
                     automount_service_account_token: Some(false),
                     security_context: Some(k8s_openapi::api::core::v1::PodSecurityContext {
-                        run_as_non_root: Some(true),
+                        run_as_user: Some(1000),
                         fs_group: Some(1000),
                         ..Default::default()
                     }),
@@ -340,8 +307,7 @@ fn agent_deployment(
                             ..Default::default()
                         }),
                         readiness_probe: Some(k8s_openapi::api::core::v1::Probe {
-                            http_get: Some(k8s_openapi::api::core::v1::HTTPGetAction {
-                                path: Some("/v1/health".into()),
+                            tcp_socket: Some(k8s_openapi::api::core::v1::TCPSocketAction {
                                 port: k8s_openapi::apimachinery::pkg::util::intstr::IntOrString::Int(7777),
                                 ..Default::default()
                             }),
@@ -355,7 +321,7 @@ fn agent_deployment(
                         name: "houston-data".into(),
                         persistent_volume_claim: Some(
                             k8s_openapi::api::core::v1::PersistentVolumeClaimVolumeSource {
-                                claim_name: Some(pvc_name.to_string()),
+                                claim_name: pvc_name.to_string(),
                                 ..Default::default()
                             },
                         ),

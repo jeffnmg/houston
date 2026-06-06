@@ -1,5 +1,5 @@
 use axum::body::Body;
-use axum::http::{Request, StatusCode, Uri};
+use axum::http::{StatusCode, Uri};
 use axum::response::Response;
 use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use reqwest::Client;
